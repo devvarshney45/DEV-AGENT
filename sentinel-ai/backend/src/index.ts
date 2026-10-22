@@ -95,6 +95,17 @@ async function main() {
 ╚═══════════════════════════════════════════╝
     `);
   });
+
+  // Start embedded BullMQ scan worker for single-container/Render/Railway deployment
+  if (process.env.EMBEDDED_WORKER === 'true' || process.env.NODE_ENV === 'production') {
+    try {
+      const { startWorker } = await import('./workers/scanWorker');
+      startWorker();
+      console.log('[Worker] Embedded BullMQ scan worker initialized');
+    } catch (e: any) {
+      console.warn('[Worker] Could not start embedded worker:', e.message);
+    }
+  }
 }
 
 main().catch(console.error);
