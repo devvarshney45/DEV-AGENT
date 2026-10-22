@@ -54,9 +54,22 @@ const projectRoutes_1 = __importDefault(require("./routes/projectRoutes"));
 const scanRoutes_1 = __importDefault(require("./routes/scanRoutes"));
 const app = (0, express_1.default)();
 // ── Security middleware ────────────────────────────────────
-app.use((0, helmet_1.default)());
+app.use((0, helmet_1.default)({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use((0, cors_1.default)({
-    origin: env_1.config.frontendUrl,
+    origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        if (
+            origin === env_1.config.frontendUrl ||
+            origin.endsWith('.vercel.app') ||
+            origin.includes('localhost') ||
+            env_1.config.frontendUrl === '*'
+        ) {
+            return callback(null, true);
+        }
+        return callback(null, true);
+    },
     credentials: true,
 }));
 // Rate limiting for the SentinelAI API itself

@@ -19,9 +19,24 @@ import scanRoutes from './routes/scanRoutes';
 const app = express();
 
 // ── Security middleware ────────────────────────────────────
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use(cors({
-  origin: config.frontendUrl,
+  origin: (origin, callback) => {
+    // Allow non-browser requests or matching origins
+    if (!origin) return callback(null, true);
+    if (
+      origin === config.frontendUrl ||
+      origin.endsWith('.vercel.app') ||
+      origin.includes('localhost') ||
+      config.frontendUrl === '*'
+    ) {
+      return callback(null, true);
+    }
+    // Fallback: allow all origins in deployment
+    return callback(null, true);
+  },
   credentials: true,
 }));
 
