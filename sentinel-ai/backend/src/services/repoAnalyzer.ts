@@ -287,6 +287,68 @@ function parseExpressRoutes(
   return endpoints;
 }
 
+// Parse Next.js App Router API Routes (e.g. app/api/auth/register/route.ts)
+function parseNextApiRoutes(
+  content: string,
+  filePath: string,
+  relPath: string
+): DiscoveredEndpoint[] {
+  const endpoints: DiscoveredEndpoint[] = [];
+  const match = relPath.match(/(?:^|[\\/])api[\\/](.*?)[\\/]route\.(?:ts|js|mjs)$/i);
+  if (!match) return endpoints;
+
+  const apiSubPath = match[1].replace(/\\/g, '/');
+  const routePath = `/api/${apiSubPath}`;
+
+  const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
+  const lines = content.split('\n');
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    for (const method of methods) {
+      if (new RegExp(`export\\s+(?:async\\s+)?function\\s+${method}\\b`).test(line)) {
+        const handlerBlock = lines.slice(lineIndex, Math.min(lines.length, lineIndex + 35)).join('\n');
+
+        const bodyMatch = handlerBlock.match(/(?:const|let|var)\s*\{\s*([^}]+)\}\s*=\s*(?:await\s+)?(?:req\.json\(\)|request\.json\(\))/);
+        const bodyKeys = bodyMatch
+          ? bodyMatch[1].split(',').map((k) => k.trim().split(':')[0].trim()).filter(Boolean)
+          : [];
+
+        let requestBodySchema: Record<string, unknown> | undefined;
+        if (bodyKeys.length > 0) {
+          const schema: Record<string, string> = {};
+          bodyKeys.forEach((key) => {
+            schema[key] = key.toLowerCase().includes('id') || key.toLowerCase().includes('amount') ? 'number' : 'string';
+          });
+          requestBodySchema = schema;
+        }
+
+        const lowerPath = routePath.toLowerCase();
+        let description: string | undefined;
+        if (lowerPath.includes('signup') || lowerPath.includes('register')) {
+          if (lowerPath.includes('admin') || handlerBlock.includes("role: 'admin'") || handlerBlock.includes('role === "admin"')) {
+            description = '🚨 ARCHITECTURAL BREAKPOINT: Admin/privilege signup detected. Admins should only be seeded or invited via secure login, not self-signed up!';
+          }
+        }
+
+        endpoints.push({
+          method,
+          path: routePath,
+          sourceFile: relPath,
+          sourceLine: lineIndex + 1,
+          authRequired: handlerBlock.includes('auth') || handlerBlock.includes('session') || handlerBlock.includes('token'),
+          roles: lowerPath.includes('admin') ? ['admin'] : [],
+          middleware: [],
+          requestBodySchema,
+          description,
+        });
+      }
+    }
+  }
+
+  return endpoints;
+}
+
 // Main analysis function
 export async function analyzeRepository(repoPath: string): Promise<AnalysisResult> {
   const warnings: string[] = [];
@@ -301,19 +363,35 @@ export async function analyzeRepository(repoPath: string): Promise<AnalysisResul
     }
   }
 
-  // Parse package.json
-  const pkgFile = fileContents.find((f) => path.basename(f.path) === 'package.json');
+  // Parse package.json (in monorepos with frontend + backend, prioritize backend/server/api)
+  const pkgFiles = fileContents.filter((f) => path.basename(f.path) === 'package.json');
+  const backendPkg = pkgFiles.find((f) =>
+    /(?:backend|server|api|services)[\\/]package\.json$/i.test(f.path)
+  );
+  const rootPkg = pkgFiles.find((f) => path.relative(repoPath, f.path) === 'package.json');
+  const pkgFile = backendPkg || rootPkg || pkgFiles[0];
+
   let pkgJson: Record<string, unknown> = {};
   if (pkgFile) {
-    try { pkgJson = JSON.parse(pkgFile.content); } catch { warnings.push('Could not parse package.json'); }
+    try {
+      pkgJson = JSON.parse(pkgFile.content);
+    } catch {
+      warnings.push('Could not parse package.json');
+    }
   }
 
-  const allDeps: Record<string, string> = {
-    ...(pkgJson.dependencies as Record<string, string> ?? {}),
-    ...(pkgJson.devDependencies as Record<string, string> ?? {}),
-  };
+  // Merge dependencies across all package.json files so backend packages are never lost in monorepos
+  const allDeps: Record<string, string> = {};
+  for (const p of pkgFiles) {
+    try {
+      const parsed = JSON.parse(p.content);
+      Object.assign(allDeps, parsed.dependencies || {}, parsed.devDependencies || {});
+    } catch {
+      // ignore
+    }
+  }
 
-  const framework = detectFramework(pkgJson);
+  const framework = detectFramework(pkgJson) !== 'unknown' ? detectFramework(pkgJson) : detectFramework({ dependencies: allDeps });
   const language = files.some((f) => f.endsWith('.ts')) ? 'TypeScript' : 'JavaScript';
   const packageManager = fs.existsSync(path.join(repoPath, 'yarn.lock'))
     ? 'yarn'
@@ -343,8 +421,9 @@ export async function analyzeRepository(repoPath: string): Promise<AnalysisResul
     if (/node_modules|dist|build|\.next/.test(filePath)) continue;
 
     const relPath = path.relative(repoPath, filePath);
-    const parsed = parseExpressRoutes(content, filePath, relPath);
-    endpoints.push(...parsed);
+    const parsedExpress = parseExpressRoutes(content, filePath, relPath);
+    const parsedNext = parseNextApiRoutes(content, filePath, relPath);
+    endpoints.push(...parsedExpress, ...parsedNext);
   }
 
   // Deduplicate endpoints by method+path
