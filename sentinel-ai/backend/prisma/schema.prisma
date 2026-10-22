@@ -1,0 +1,199 @@
+// ============================================================
+// prisma/schema.prisma — Complete database schema for
+// SentinelAI. Tables cover: users, projects, repositories,
+// discovered API endpoints, agent runs, test runs/results,
+// security findings, load test results, and RAG documents.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  username     String    @unique
+  passwordHash String
+  role         String    @default("user")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  projects     Project[]
+
+  @@map("users")
+}
+
+model Project {
+  id          String       @id @default(uuid())
+  name        String
+  description String?
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  repository  Repository?
+  agentRuns   AgentRun[]
+
+  @@map("projects")
+}
+
+model Repository {
+  id              String        @id @default(uuid())
+  projectId       String        @unique
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  githubUrl       String?
+  localPath       String?
+  clonedPath      String?
+  framework       String?
+  language        String?
+  packageManager  String?
+  analysisStatus  String        @default("pending") // pending | running | done | failed
+  analysisError   String?
+  analysisResult  Json?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  endpoints       ApiEndpoint[]
+
+  @@map("repositories")
+}
+
+model ApiEndpoint {
+  id                   String      @id @default(uuid())
+  repositoryId         String
+  repository           Repository  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  method               String      // GET POST PUT DELETE PATCH
+  path                 String
+  controller           String?
+  sourceFile           String?
+  sourceLine           Int?
+  authRequired         Boolean     @default(false)
+  roles                String[]    @default([])
+  middleware           String[]    @default([])
+  requestBodySchema    Json?
+  parameters           Json?
+  description          String?
+  createdAt            DateTime    @default(now())
+
+  @@map("api_endpoints")
+}
+
+model AgentRun {
+  id            String      @id @default(uuid())
+  projectId     String
+  project       Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  instruction   String?
+  mode          String      // custom | full_scan
+  status        String      @default("pending") // pending | running | done | failed | cancelled
+  progress      Int         @default(0)
+  currentStep   String?
+  totalSteps    Int?
+  iterations    Int         @default(0)
+  toolCalls     Int         @default(0)
+  tokenUsage    Json?
+  error         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  testRuns      TestRun[]
+  findings      Finding[]
+
+  @@map("agent_runs")
+}
+
+model TestRun {
+  id          String      @id @default(uuid())
+  agentRunId  String
+  agentRun    AgentRun    @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  type        String      // auth | authz | rate_limit | validation | load | functional | business_logic
+  name        String
+  target      String      // e.g. POST /api/auth/login
+  status      String      @default("pending") // pending | running | passed | failed | error
+  request     Json?
+  response    Json?
+  durationMs  Int?
+  notes       String?
+  createdAt   DateTime    @default(now())
+  results     TestResult[]
+
+  @@map("test_runs")
+}
+
+model TestResult {
+  id         String   @id @default(uuid())
+  testRunId  String
+  testRun    TestRun  @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+  passed     Boolean
+  actual     Json?
+  expected   Json?
+  assertion  String?
+  createdAt  DateTime @default(now())
+
+  @@map("test_results")
+}
+
+model Finding {
+  id            String   @id @default(uuid())
+  agentRunId    String
+  agentRun      AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  severity      String   // critical | high | medium | low | info
+  category      String   // e.g. IDOR | broken_auth | rate_limit | input_validation
+  title         String
+  description   String
+  evidence      Json?    // actual request/response proving the finding
+  recommendation String?
+  owaspRef      String?  // e.g. API1:2023
+  falsePositive Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@map("findings")
+}
+
+model LoadTestResult {
+  id               String   @id @default(uuid())
+  agentRunId       String
+  target           String
+  vus              Int
+  durationSeconds  Int
+  totalRequests    Int
+  successCount     Int
+  errorCount       Int
+  errorRate        Float
+  avgLatencyMs     Float
+  p90LatencyMs     Float
+  p95LatencyMs     Float
+  p99LatencyMs     Float
+  throughputRps    Float
+  statusDistrib    Json?
+  rawOutput        String?
+  createdAt        DateTime @default(now())
+
+  @@map("load_test_results")
+}
+
+model Document {
+  id        String          @id @default(uuid())
+  source    String          // e.g. "OWASP API Security Top 10"
+  title     String
+  url       String?
+  content   String
+  createdAt DateTime        @default(now())
+  chunks    DocumentChunk[]
+
+  @@map("documents")
+}
+
+model DocumentChunk {
+  id         String   @id @default(uuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content    String
+  chunkIndex Int
+  // Embedding stored as raw float array string; pgvector extension handles similarity
+  // We store embedding metadata here; the actual pgvector column is managed via raw SQL
+  createdAt  DateTime @default(now())
+
+  @@map("document_chunks")
+}

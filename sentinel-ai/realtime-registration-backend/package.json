@@ -1,0 +1,13 @@
+{
+  "name": "realtime-registration-backend",
+  "version": "1.0.0",
+  "description": "Production test registration backend with 10 APIs, rate limiters, and admin signup breakpoint",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.1"
+  }
+}
